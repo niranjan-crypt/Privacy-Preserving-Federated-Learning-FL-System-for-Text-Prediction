@@ -1,0 +1,5 @@
+flwr>=1.0.0
+tensorflow>=2.10.0
+numpy>=1.21.0
+psutil>=5.8.0
+cryptography>=3.4.0

@@ -1,0 +1,641 @@
+Modern mobile devices have access to a wealth of data suitable for learning models, which in turn can greatly improve the user experience on the device. For example, language models can improve speech recognition and text entry, and image models can automatically select good photos. However, this rich data is often privacy sensitive, large in quantity, or both, which may preclude logging to the data center and training there using conventional approaches. We advocate an alternative that leaves the training data distributed on the mobile devices, and learns a shared model by aggregating locally-computed updates. We term this decentralized approach Federated Learning.
+
+We present a practical method for the federated learning of deep networks based on iterative model averaging, and conduct an extensive empirical evaluation, considering five different model architectures and four datasets. These experiments demonstrate the approach is robust to the unbalanced and non-IID data distributions that are a defining characteristic of this setting. Communication costs are the principal constraint, and we show a reduction in required communication rounds by 10--100x as compared to synchronized stochastic gradient descent.
+
+Introduction
+
+Increasingly, phones and tablets are the primary computing devices for
+many people. The powerful sensors
+on these devices (including cameras, microphones, and GPS), combined
+with the fact they are frequently carried, means they have
+access to an unprecedented amount of data, much of it private in
+nature. Models learned on such data hold the promise of greatly
+improving usability by powering more intelligent applications,
+but the sensitive nature of the data means there
+are risks and responsibilities to storing it in a centralized
+location.
+
+We investigate a learning technique that allows users to collectively
+reap the benefits of shared models trained from this rich data,
+without the need to centrally store it. This approach also allows us
+to scale up learning by utilizing the plentiful computation available at
+the edges of the network, conveniently colocated with the data.
+We term our approach Federated Learning, since the learning
+task is solved by a loose federation of participating devices (which
+we refer to as clients) which are coordinated by a central
+server. Each client has a local training dataset which is never
+uploaded to the server. Instead, each client computes an update to the
+current global model maintained by the server, and only this update is
+communicated. This is a direct application of the principle of
+focused collection or data minimization proposed by the
+2012 White House report on privacy of consumer
+data. Since these updates are specific to
+improving the current model, there is no reason to store them once
+they have been applied.
+
+A principal advantage of this approach is the decoupling of model training from the need for direct access to the raw training data. Clearly, some trust of the server coordinating the training is still required. However, for applications where the training objective can be specified on the basis of data available on each client, federated learning can significantly reduce privacy and security risks by limiting the attack surface to only the device, rather than the device and the cloud.
+
+Our primary contributions are 1) the identification of the problem of
+training on decentralized data from mobile devices as an important
+research direction; 2) the selection of a straightforward and
+practical algorithm that can be applied to this setting; and 3) an
+extensive empirical evaluation of the proposed approach. More
+concretely, we introduce the Federated Averaging algorithm, which combines
+local stochastic gradient descent (SGD) on each client with a server
+that performs model averaging. We perform extensive experiments on
+this algorithm, demonstrating it is robust to unbalanced and non-IID
+data distributions, and can reduce the rounds of communication needed
+to train a deep network on decentralized data by orders of magnitude.
+
+Federated Learning
+
+Ideal problems for federated learning have the following properties:
+1) Training on real-world data from mobile devices provides a distinct
+advantage over training on proxy data that is generally available in
+the data center. 2) This data is privacy sensitive or large in size
+(compared to the size of the model), so it is preferable not to log it
+to the data center purely for the purpose of model training (in
+service of the focused collection principle).
+3) For supervised tasks, labels on the data can be inferred naturally
+from user interaction.
+
+Many models that power intelligent behavior on mobile devices fit the
+above criteria. As two examples, we consider image
+classification, for example predicting which photos are most likely
+to be viewed multiple times in the future, or shared; and language
+models, which can be used to improve voice recognition and text
+entry on touch-screen keyboards by improving decoding,
+next-word-prediction, and even predicting whole
+replies.
+The potential training data for both these tasks (all the photos a
+user takes and everything they type on their mobile keyboard,
+including passwords, URLs, messages, etc.) can be privacy sensitive.
+The distributions from which these examples are drawn are also likely
+to differ substantially from easily available proxy datasets: the use
+of language in chat and text messages is generally much different than
+standard language corpora, e.g., Wikipedia and other web documents; the photos people take on their phone are likely
+quite different than typical Flickr photos. And finally, the labels
+for these problems are directly available: entered text is
+self-labeled for learning a language model, and photo labels can be
+defined by natural user interaction with their photo app (which photos
+are deleted, shared, or viewed).
+
+Both of these tasks are well-suited to learning a neural network. For
+image classification feed-forward deep networks, and in
+particular convolutional networks, are well-known to provide
+state-of-the-art results. For language
+modeling tasks recurrent neural networks, and in particular LSTMs,
+have achieved state-of-the-art results.
+
+Privacy
+
+Federated learning has distinct privacy advantages compared to data
+center training on persisted data. Holding even an ``anonymized''
+dataset can still put user privacy at risk via joins with other
+data. In contrast, the information transmitted
+for federated learning is the minimal update necessary to improve a
+particular model (naturally, the strength of the privacy benefit
+depends on the content of the updates). The updates themselves can (and should) be
+ephemeral. They will never contain more information than the raw
+training data (by the data processing inequality), and will generally
+contain much less. Further, the source of the updates is not needed by
+the aggregation algorithm, so updates can be transmitted without
+identifying meta-data over a mix network such as Tor
+or via a trusted third party.
+We briefly discuss the possibility of combining federated learning
+with secure multiparty computation and differential privacy at the
+end of the paper.
+
+Advantages for large datasets
+
+Federated learning can also provide a distinct advantage when training
+on large volumes of data. The network traffic per-client necessary to
+train in the data center is simply the size of a client's local
+dataset, which must be transmitted once; for federated learning, the
+per-client traffic is
+(number of communication rounds) x (update size). This
+latter quantity can be substantially smaller if the update-size
+(generally (number of model parameters)) is relatively small
+compared to the volume of training data needed, as when training on high-resolution photos or videos.
+
+Federated Optimization
+
+We refer to the optimization problem implicit in federated learning as
+federated optimization, drawing a connection (and contrast) to
+distributed optimization.
+Federated optimization has several key properties
+that differentiate it from a typical distributed optimization
+problem:
+
+- Non-IID The training data on a given client is
+typically based on the usage of the mobile device by a particular
+user, and hence any particular user's local dataset will not be
+representative of the population distribution.
+- Unbalanced Similarly, some users will make much heavier
+use of the service or app than others, leading to varying amounts of
+local training data.
+- Massively distributed We expect the number of clients
+participating in an optimization to be much larger than the average
+number of examples per client.
+- Limited communication Mobile devices are frequently
+offline or on slow or expensive connections.
+
+In this work, our emphasis is on the non-IID and unbalanced properties
+of the optimization, as well as the critical nature of the
+communication constraints.
+A deployed federated optimization system must also address a myriad of
+practical issues: client datasets that change as data is added and
+deleted; client availability that correlates with the local data
+distribution in complex ways (e.g., phones from speakers of
+American English will likely be plugged in at different times than
+speakers of British English); and clients that never respond or
+send corrupted updates.
+
+These issues are beyond the scope of the current work; instead, we use
+a controlled environment that is suitable for experiments, but still
+addresses the key issues of client availability and unbalanced and
+non-IID data. We assume a synchronous update scheme that proceeds in
+rounds of communication. There is a fixed set of K clients, each
+with a fixed local dataset. At the beginning of each round, a random
+fraction C of clients is selected, and the server sends
+the current global algorithm state to each of these clients (e.g., the
+current model parameters). We only select a fraction of clients for
+efficiency, as our experiments show diminishing returns for adding
+more clients beyond a certain point. Each selected client then
+performs local computation based on the global state and its local
+dataset, and sends an update to the server. The server then applies
+these updates to its global state, and the process repeats.
+
+While we focus on non-convex neural network objectives, the algorithm
+we consider is applicable to any finite-sum objective of the form
+
+For a machine learning problem, we typically take , that is, the loss of the prediction on example $(x_i, y_i)$
+made with model parameters $w$.
+We assume there are K clients over which the data is partitioned,
+with $\pp_k$ the set of indexes of data points on client $k$, with $n_k
+= |\pp_k|$. Thus, we can re-write the objective as
+
+If the partition $\pp_k$ was formed by distributing the training
+examples over the clients uniformly at random, then we would have
+, where the expectation is over the set of
+examples assigned to a fixed client $k$. This is the IID assumption
+typically made by distributed optimization algorithms; we refer to the
+case where this does not hold (that is, $F_k$ could be an arbitrarily
+bad approximation to $f$) as the non-IID setting.
+
+In data center optimization, communication costs are relatively small,
+and computational costs dominate, with much of the recent emphasis
+being on using GPUs to lower these costs. In contrast, in federated
+optimization communication costs dominate --- we will typically be
+limited by an upload bandwidth of 1 MB/s or less. Further, clients
+will typically only volunteer to participate in the optimization when
+they are charged, plugged-in, and on an unmetered wi-fi
+connection. Further, we expect each client will only participate in a
+small number of update rounds per day.
+On the other hand, since any single on-device dataset is small
+compared to the total dataset size, and modern smartphones have
+relatively fast processors (including GPUs), computation becomes
+essentially free compared to communication costs for many model
+types. Thus, our goal is to use additional computation in order to
+decrease the number of rounds of communication needed to train a
+model. There are two primary ways we can add computation:
+1) increased parallelism, where we use more clients working
+independently between each communication round; and, 2)
+increased computation on each client, where rather than
+performing a simple computation like a gradient calculation, each
+client performs a more complex calculation between each
+communication round.
+We investigate both of these approaches, but the speedups we achieve
+are due primarily to adding more computation on each client, once a
+minimum level of parallelism over clients is used.
+
+Related Work
+Distributed training by iteratively averaging locally trained models
+has been studied
+by for the perceptron and
+for speech recognition DNNs.
+studies an asynchronous approach with ``soft''
+averaging. These works only consider the cluster / data center setting
+(at most 16 workers, wall-clock time based on fast networks), and do
+not consider datasets that are unbalanced and non-IID, properties that
+are essential to the federated learning setting.
+We adapt this style of algorithm to the federated setting and perform
+the appropriate empirical evaluation, which asks different questions
+than those relevant in the data center setting, and requires different
+methodology.
+
+Using similar motivation to ours, also
+discusses the advantages of keeping sensitive user data on device. The
+work of is related in several ways: they focus
+on training deep networks, emphasize the importance of privacy, and
+address communication costs by only sharing a subset of the parameters
+during each round of communication; however, they also do not consider
+unbalanced and non-IID data, and the empirical evaluation is limited.
+
+In the convex setting, the problem of distributed optimization and
+estimation has received significant attention
+, and
+some algorithms do focus specifically on communication efficiency
+. In addition to assuming convexity,
+this existing work generally requires that the number of clients is
+much smaller than the number of examples per client, that the data is
+distributed across the clients in IID fashion, and that each node has
+an identical number of data points --- all of these assumptions are
+violated in the federated optimization setting. Asynchronous
+distributed forms of SGD have also been applied to training neural
+networks, e.g., , but these approaches require a
+prohibitive number of updates in the federated setting.
+Distributed consensus algorithms (e.g., ) relax the
+IID assumption, but are still not a good fit for
+communication-constrained optimization over very many clients.
+
+One endpoint of the (parameterized) algorithm family we consider is
+simple one-shot averaging, where each client solves for the model that
+minimizes (possibly regularized) loss on their local data, and these
+models are averaged to produce the final global model. This approach
+has been studied extensively in the convex case with IID data, and it
+is known that in the worst-case, the global model produced is no
+better than training a model on a single client
+.
+
+The Federated Averaging Algorithm
+The recent multitude of successful applications of deep learning have
+almost exclusively relied on variants of stochastic gradient descent
+(SGD) for optimization; in fact, many advances can be understood as
+adapting the structure of the model (and hence the loss function) to
+be more amenable to optimization by simple gradient-based methods
+. Thus, it is natural that we build
+algorithms for federated optimization by starting from SGD.
+
+SGD can be applied naively to the federated optimization problem,
+where a single batch gradient calculation (say on a randomly selected
+client) is done per round of communication. This approach is
+computationally efficient, but requires very large numbers of rounds
+of training to produce good models (e.g., even using an advanced
+approach like batch normalization, trained
+MNIST for 50000 steps on minibatches of size 60). We consider this
+baseline in our CIFAR-10 experiments.
+
+In the federated setting, there is little cost in wall-clock time to
+involving more clients, and so for our baseline we use large-batch
+synchronous SGD; experiments by show this
+approach is state-of-the-art in the data center setting, where it
+outperforms asynchronous approaches. To apply this approach in the
+federated setting, we select a C-fraction of clients on
+each round, and compute the gradient of the loss over all the data
+held by these clients. Thus, C controls the global
+batch size, with C=1 corresponding to full-batch
+(non-stochastic) gradient descent. We refer to this
+baseline algorithm as Federated SGD (or FedSGD).
+
+A typical implementation of FedSGD with C=1 and a
+fixed learning rate $\eta$ has each client $k$ compute $g_k = \grad
+F_k(w_t)$, the average gradient on its local data at the current model
+$w_t$, and the central server aggregates these gradients and applies
+the update $ w_{t+1} \leftarrow w_t - \eta \sum_{k=1}^K \frac{n_k}{n}
+g_k, $ since $\sum_{k=1}^K \frac{n_k}{n} g_k = \grad f(w_t)$.
+An equivalent update is given by
+$\forall k,\ w_{t+1}^k \leftarrow w_t - \eta g_k$
+and then
+$w_{t+1} \leftarrow \sum_{k=1}^K \frac{n_k}{n} w_{t+1}^k$.
+That is, each client locally takes one step of gradient descent on the
+current model using its local data, and the server then takes a
+weighted average of the resulting models.
+Once the algorithm is written this way, we
+can add more computation to each client by iterating the local update
+$w^k \leftarrow w^k - \eta \grad F_k(w^k)$ multiple times before the
+averaging step. We term this approach Federated Averaging (or FedAvg). The
+amount of computation is controlled by three key parameters:
+C, the fraction of clients that perform computation on
+each round; E, then number of training passes each client
+makes over its local dataset on each round; and B, the local
+minibatch size used for the client updates. We write B=all to
+indicate that the full local dataset is treated as a single minibatch.
+Thus, at one endpoint of this algorithm family, we can take
+B=all and E=1 which corresponds exactly to
+FedSGD. For a client with $n_k$ local examples, the number of
+local updates per round is given by $u_k = E\frac{n_k}{B}$;
+Complete pseudo-code is given in Algorithm 1.
+
+For general non-convex objectives, averaging models in
+parameter space could produce an arbitrarily bad model. Following the
+approach of , we see exactly this bad
+behavior when we average two MNIST digit-recognition
+models trained from different initial
+conditions (Figure 1, left). For this figure, the
+parent models $w$ and $w'$ were each trained on non-overlapping IID
+samples of 600 examples from the MNIST training set. Training was via
+SGD with a fixed learning rate of 0.1 for 240 updates on minibatches
+of size 50 (or E=20 passes over the mini-datasets of
+size 600). This is approximately the amount of training where the
+models begin to overfit their local datasets.
+
+Recent work indicates that in practice, the loss surfaces of
+sufficiently over-parameterized NNs are surprisingly well-behaved and
+in particular less prone to bad local minima than previously thought
+. And
+indeed, when we start two models from the same random
+initialization and then again train each independently on a
+different subset of the data (as described above), we find that naive
+parameter averaging works surprisingly well
+(Figure 1, right): the average of these two models,
+, achieves significantly lower loss on the full MNIST
+training set than the best model achieved by training on either of the
+small datasets independently. While Figure 1 starts
+from a random initialization, note a shared starting model $w_t$ is
+used for each round of FedAvg, and so the same intuition applies.
+
+The success of dropout training also provides some intuition for the
+success of our model averaging scheme; dropout training can be
+interpreted as averaging models of different architectures
+which share parameters, and the inference-time scaling of the model
+parameters is analogous to the model averaging used in FedAvg.
+
+Experimental Results
+We are motivated by both image classification and language modeling
+tasks where good models can greatly enhance the usability of mobile
+devices. For each of these tasks we first picked a proxy dataset of
+modest enough size that we could thoroughly investigate the
+hyperparameters of the FedAvg algorithm. While each individual
+training run is relatively small, we trained over 2000 individual
+models for these experiments. We then present results on the benchmark
+CIFAR-10 image classification task. Finally, to demonstrate the
+effectiveness of FedAvg on a real-world problem with a natural
+partitioning of the data over clients, we evaluate on a large language
+modeling task.
+
+Our initial study includes three model families on two datasets. The
+first two are for the MNIST digit recognition task:
+1) A simple multilayer-perceptron with 2-hidden layers with 200 units
+each using ReLu activations (199,210 total parameters), which we refer
+to as the MNIST MLP.
+2) A CNN with two 5x5 convolution layers (the first with 32 channels,
+the second with 64, each followed with 2x2 max pooling), a fully
+connected layer with 512 units and ReLu activation, and a final
+softmax output layer (1,663,370 total parameters).
+To study federated optimization, we also need to specify how the data
+is distributed over the clients. We study two ways of partitioning the
+MNIST data over clients: IID, where the data is shuffled, and then
+partitioned into 100 clients each receiving 600 examples, and
+Non-IID, where we first sort the data by digit label,
+divide it into 200 shards of size 300, and assign each of 100 clients
+2 shards. This is a pathological non-IID partition of
+the data, as most clients will only have examples of two
+digits, letting us explore the degree to which our algorithms
+will break on highly non-IID data. Both of these partitions are balanced, however.
+
+For language modeling, we built a dataset from The Complete
+Works of William Shakespeare . We construct a
+client dataset for each speaking role in each play with at least two
+lines. This produced a dataset with 1146 clients. For each client, we
+split the data into a set of training lines (the first 80% of lines
+for the role), and test lines (the last 20%, rounded up to at least
+one line). The resulting dataset has 3,564,579 characters in the
+training set, and 870,014 characters in the test set. This data is substantially unbalanced,
+with many roles having only a few lines, and a few with a large number
+of lines.
+Further, observe the test set is not a random sample of lines, but is
+temporally separated by the chronology of each play. Using an
+identical train/test split, we also form a balanced and IID version of
+the dataset, also with 1146 clients.
+
+On this data we train a stacked character-level LSTM language model,
+which after reading each character in a line, predicts the next
+character . The model takes a series of
+characters as input and embeds each of these into a learned 8
+dimensional space. The embedded characters are then processed through
+2 LSTM layers, each with 256 nodes. Finally the output of the second
+LSTM layer is sent to a softmax output layer with one node per
+character. The full model has 866,578 parameters, and we trained using
+an unroll length of 80 characters.
+
+SGD is sensitive to the tuning of the learning-rate parameter
+$\eta$. The results reported here are based on training
+over a sufficiently wide grid of learning rates (typically 11-13
+values for $\eta$ on a multiplicative grid of resolution
+$10^{\frac{1}{3}}$ or $10^{\frac{1}{6}}$). We checked to ensure the
+best learning rates were in the middle of our grids, and that there
+was not a significant difference between the best learning rates.
+Unless otherwise noted, we plot metrics for the best performing rate
+selected individually for each $x$-axis value.
+We find that the optimal learning rates do not vary too
+much as a function of the other parameters.
+
+Increasing parallelism
+We first experiment with the client fraction C, which controls
+the amount of multi-client parallelism. Table 1 shows
+the impact of varying C for both MNIST models.
+We report the number of communication rounds necessary to achieve a
+target test-set accuracy. To compute this, we construct a learning
+curve for each combination of parameter settings, optimizing $\eta$ as
+described above and then making each curve monotonically improving by
+taking the best value of test-set accuracy achieved over all prior
+rounds. We then calculate the number of rounds where the curve crosses
+the target accuracy, using linear interpolation between the discrete
+points forming the curve. This is perhaps best understood by
+reference to Figure 2, where the gray lines show
+the targets.
+
+With B=all (for MNIST processing all 600 client examples as a
+single batch per round), there is only a small advantage in increasing
+the client fraction. Using the smaller batch size B=10 shows a
+significant improvement in using $C \ge 0.1$, especially in
+the non-IID case. Based on these results, for most of the remainder of
+our experiments we fix $C = 0.1$, which strikes a good
+balance between computational efficiency and convergence
+rate. Comparing the number of rounds for the B=all and B=10
+columns in Table 1 shows a dramatic speedup, which we
+investigate next.
+
+Increasing computation per client
+In this section, we fix $C=0.1$, and add more computation
+per client on each round, either decreasing B, increasing
+E, or both. Figure 2 demonstrates that
+adding more local SGD updates per round can produce a dramatic
+decrease in communication costs, and Table 2
+quantifies these speedups.
+The expected number of updates per client per
+round is $u = (\E[n_k] / B) E = n E / (K B)$,
+where the expectation is over the draw of a random client $k$. We
+order the rows in each section of Table 2 by
+this statistic. We see that increasing $u$ by varying both E
+and B is effective. As long as B is large enough to take
+full advantage of available parallelism on the client hardware, there
+is essentially no cost in computation time for lowering it, and so in
+practice this should be the first parameter tuned.
+
+For the IID partition of the MNIST data, using more computation per
+client decreases the number of rounds to reach the target accuracy by
+35x for the CNN and 46x for the MLP (see
+Table 4 in Appendix A for details for the
+MLP). The speedups for the pathologically partitioned non-IID data are
+smaller, but still substantial (2.8 -- 3.7x). It is
+impressive that averaging provides any advantage (vs. actually
+diverging) when we naively average the parameters of models trained on
+entirely different pairs of digits. Thus, we view this as strong
+evidence for the robustness of this approach.
+
+The unbalanced and non-IID distribution of the Shakespeare (by
+role in the play) is much more representative of the kind of data
+distribution we expect for real-world applications. Encouragingly, for
+this problem learning on the non-IID and unbalanced data is actually
+much easier (a 95x speedup vs 13x for the balanced IID
+data); we conjecture this is largely due to the fact some roles have
+relatively large local datasets, which makes increased local training
+particularly valuable.
+
+For all three model classes, FedAvg converges to a
+higher level of test-set accuracy than the baseline FedSGD models.
+This trend continues even if the lines are extended beyond the plotted
+ranges. For example, for the CNN the B=all, E=1
+FedSGD model eventually reaches 99.22% accuracy after 1200
+rounds (and had not improved further after 6000 rounds), while the
+B=10, E=20 FedAvg model reaches an accuracy of
+99.44% after 300 rounds. We conjecture that in addition to lowering
+communication costs, model averaging produces a regularization benefit
+similar to that achieved by dropout .
+
+We are primarily concerned with generalization performance, but
+FedAvg is effective at optimizing the training loss as well,
+even beyond the point where test-set accuracy plateaus. We observed
+similar behavior for all three model classes, and present plots for
+the MNIST CNN in Figure 3 in
+Appendix A.
+
+Can we over-optimize on the client datasets?
+The current model parameters only influence the optimization
+performed in each ClientUpdate via initialization. Thus, as
+$E \rightarrow \infty$, at least for a convex problem
+eventually the initial conditions should be irrelevant, and the global
+minimum would be reached regardless of initialization. Even for a
+non-convex problem, one might conjecture the algorithm would converge
+to the same local minimum as long as the initialization was in the same
+basin. That is, we would expect that while one round of averaging
+might produce a reasonable model, additional rounds of communication
+(and averaging) would not produce further improvements.
+
+Figure 4 shows the impact of large
+E during initial training on the Shakespeare LSTM
+problem. Indeed, for very large numbers of local epochs, FedAvg
+can plateau or diverge.
+This result suggests that for some models, especially in the later
+stages of convergence, it may be useful to decay the amount of local
+computation per round (moving to smaller E or larger B)
+in the same way decaying learning rates can be useful.
+Figure 6 in Appendix A gives the
+analogous experiment for the MNIST CNN. Interestingly, for this model
+we see no significant degradation in the convergence rate for large
+values of E. However, we see slightly better performance for
+E=1 versus E=5 for the large-scale language modeling
+task described below (see Figure 8 in
+Appendix A).
+
+CIFAR experiments
+We also ran experiments on the CIFAR-10 dataset
+to further validate FedAvg. The dataset
+consists of 10 classes of 32x32 images with three RGB
+channels. There are 50,000 training examples and 10,000 testing
+examples, which we partitioned into 100 clients each containing 500
+training and 100 testing examples; since there isn't a natural user
+partitioning of this data, we considered the balanced and IID setting.
+The model architecture was taken from the TensorFlow
+tutorial , which consists of two convolutional
+layers followed by two fully connected layers and then a linear
+transformation layer to produce logits, for a total of about $10^6$ parameters.
+Note that state-of-the-art approaches have achieved a test accuracy of
+96.5% for CIFAR; nevertheless, the
+standard model we use is sufficient for our needs, as our goal is to
+evaluate our optimization method, not achieve the best possible
+accuracy on this task.
+The images are preprocessed as part of the training input pipeline,
+which consists of cropping the images to 24x24, randomly flipping
+left-right and adjusting the contrast, brightness and whitening.
+
+For these experiments, we considered an additional baseline, standard
+SGD training on the full training set (no user partitioning), using
+minibatches of size 100. We achieved an ~86% test accuracy after
+197,500 minibatch updates (each minibatch update requires a
+communication round in the federated setting).
+FedAvg achieves a similar test accuracy of 85% after only 2,000
+communication rounds. For all algorithms, we tuned a learning-rate
+decay parameter in addition to the initial learning rate.
+Table 3 gives the number of communication rounds for
+baseline SGD, FedSGD, and FedAvg to reach three different accuracy
+targets, and Figure 5 gives learning-rate curves for
+FedAvg versus FedSGD.
+
+By running experiments with minibatches of size B=50 for both SGD
+and FedAvg, we can also look at accuracy as a function of the number
+of such minibatch gradient calculations. We expect SGD to do
+better here, because a sequential step is taken after each minibatch
+computation. However, as Figure 7 in the appendix
+shows, for modest values of C and E, FedAvg makes
+a similar amount of progress per minibatch computation. Further, we
+see that both standard SGD and FedAvg with only one client per
+round $(C = 0)$, demonstrate significant oscillations in
+accuracy, whereas averaging over more clients smooths this out.
+
+Large-scale LSTM experiments
+
+We ran experiments on a large-scale next-word prediction task to
+demonstrate the effectiveness of our approach on a real-world
+problem. Our training dataset consists $10$ million public posts from
+a large social network. We grouped the posts by author, for a total of
+over 500,000 clients. This dataset is a realistic proxy for the type
+of text entry data that would be present on a user's mobile device. We
+limited each client dataset to at most 5000 words, and report accuracy
+(the fraction of the data where the highest predicted probability was
+on the correct next word, out of 10000 possibilities) on a test set of
+$1e5$ posts from different (non-training) authors.
+Our model is a 256 node LSTM on a vocabulary of 10,000
+words. The input and output embeddings for each word were of dimension
+192, and co-trained with the model; there are 4,950,544 parameters in
+all. We used an unroll of 10 words.
+
+These experiments required significant computational resources
+and so we did not explore hyper-parameters as
+thoroughly: all runs trained on 200 clients per round; FedAvg
+used B=8 and E=1. We explored a variety of learning
+rates for FedAvg and the baseline FedSGD.
+Figure 6 shows monotonic learning curves for the best
+learning rates. FedSGD with $\eta = 18.0$ required 820 rounds to
+reach 10.5% accuracy, while FedAvg with $\eta=9.0$ reached an
+accuracy of 10.5% in only 35 communication rounds (23x fewer
+then FedSGD).
+We observed lower variance in test accuracy for FedAvg, see
+Figure 8 in Appendix A. This figure also
+include results for E=5, which performed
+slightly worse than E=1.
+
+Conclusions and Future Work
+Our experiments show that federated learning can be made practical, as
+FedAvg trains high-quality models using relatively few rounds of
+communication, as demonstrated by results on a variety of model
+architectures: a multi-layer perceptron, two different convolutional
+NNs, a two-layer character LSTM, and a large-scale word-level
+LSTM.
+
+While federated learning offers many practical privacy benefits,
+providing stronger guarantees via differential
+privacy,, secure
+multi-party computation , or their combination
+is an interesting direction for future work. Note that both classes of
+techniques apply most naturally to synchronous algorithms like
+FedAvg.
+
+In order to keep
+the scope of algorithms explored tractable, we limited ourselves to
+building on vanilla SGD. Investigating the compatibility of our
+approach with other optimization algorithms such as momentum,
+AdaGrad and
+ADAM, as well as with changes in model structure
+that can aid optimization, such as dropout
+and batch-normalization, are another natural
+direction for future work.
+
+Supplemental Figures and Tables
+
+Test set accuracy vs. communication
+rounds for MNIST MLP with C=0.1 and optimized $\eta$. The
+left column is the IID dataset, and right is the pathological
+2-digits-per-client non-IID data.
